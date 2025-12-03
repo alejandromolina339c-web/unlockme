@@ -1,24 +1,44 @@
 // app/api/checkout/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { stripe } from "@/lib/stripe";
+import Stripe from "stripe";
+import { NextResponse } from "next/server";
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
-/**
- * Espera un body JSON:
- * {
- *   photoId: string;
- *   title: string;
- *   price: number;
- * }
- */
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
+  // 👇 Leemos la env, pero NO lanzamos throw arriba del todo
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+
+  // 🔐 Si no hay key, respondemos un error desde la API
+  if (!stripeSecretKey) {
+    console.error("Stripe no está configurado en el entorno del servidor");
+    return NextResponse.json(
+      { error: "Stripe no está disponible en este momento." },
+      { status: 500 }
+    );
+  }
+
+  // Sin apiVersion para evitar problemas de tipos
+  const stripe = new Stripe(stripeSecretKey as string);
+
   try {
-    const { photoId, title, price } = await req.json();
+    const body = await req.json().catch(() => null);
 
-    if (!photoId || !title || !price) {
+    if (!body || !body.photoId || !body.price || !body.title) {
       return NextResponse.json(
         { error: "Faltan datos para crear el checkout" },
+        { status: 400 }
+      );
+    }
+
+    const { photoId, price, title } = body as {
+      photoId: string;
+      price: number;
+      title: string;
+    };
+
+    if (!price || price <= 0) {
+      return NextResponse.json(
+        { error: "Precio inválido" },
         { status: 400 }
       );
     }
@@ -32,28 +52,21 @@ export async function POST(req: NextRequest) {
             currency: "mxn",
             unit_amount: Math.round(price * 100),
             product_data: {
-              name: title || "Foto premium Mi-Foto",
+              name: title || "Foto premium",
             },
           },
           quantity: 1,
         },
       ],
-      success_url: `${APP_URL}/mi-foto/${photoId}?status=success`,
-      cancel_url: `${APP_URL}/mi-foto/${photoId}?status=cancel`,
+      success_url: `${appUrl}/mi-foto/${photoId}?status=success`,
+      cancel_url: `${appUrl}/mi-foto/${photoId}?status=cancel`,
     });
 
-    if (!session.url) {
-      return NextResponse.json(
-        { error: "No se pudo generar la URL de pago." },
-        { status: 500 }
-      );
-    }
-
     return NextResponse.json({ url: session.url });
-  } catch (err: any) {
+  } catch (err) {
     console.error("Error en /api/checkout:", err);
     return NextResponse.json(
-      { error: err?.message || "Error creando checkout" },
+      { error: "Error interno al crear el checkout" },
       { status: 500 }
     );
   }
