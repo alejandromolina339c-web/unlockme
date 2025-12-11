@@ -17,6 +17,7 @@ import {
   where,
   doc,
   deleteDoc,
+  getDoc,
 } from "firebase/firestore";
 
 type Photo = {
@@ -29,6 +30,12 @@ type Photo = {
   earningsDownload?: number;
   purchasesView?: number;
   purchasesDownload?: number;
+  createdAt?: Date | null;
+};
+
+type CreatorProfile = {
+  displayName?: string;
+  avatarUrl?: string | null;
 };
 
 export default function CreatorPanelPage() {
@@ -36,6 +43,8 @@ export default function CreatorPanelPage() {
 
   const [user, setUser] = useState<User | null>(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
+
+  const [profile, setProfile] = useState<CreatorProfile | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
   const [slug, setSlug] = useState("");
@@ -60,11 +69,34 @@ export default function CreatorPanelPage() {
         setUser(current);
         setCheckingAuth(false);
         loadPhotos(current.uid);
+        loadProfile(current.uid);
       }
     });
 
     return () => unsub();
   }, [router]);
+
+  // 👉 Cargar perfil del creador desde /users/{uid}
+  async function loadProfile(userId: string) {
+    try {
+      const ref = doc(db, "users", userId);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        setProfile({
+          displayName:
+            (data.displayName as string | undefined) ?? undefined,
+          avatarUrl:
+            (data.avatarUrl as string | undefined | null) ?? null,
+        });
+      } else {
+        setProfile(null);
+      }
+    } catch (err) {
+      console.error("Error cargando perfil de usuario:", err);
+      setProfile(null);
+    }
+  }
 
   // 👉 Cargar fotos del creador
   async function loadPhotos(userId: string) {
@@ -77,6 +109,16 @@ export default function CreatorPanelPage() {
       const snap = await getDocs(q);
       const list: Photo[] = snap.docs.map((d) => {
         const data = d.data() as any;
+
+        let createdAt: Date | null = null;
+        if (data.createdAt) {
+          if (typeof data.createdAt.toDate === "function") {
+            createdAt = data.createdAt.toDate();
+          } else {
+            createdAt = new Date(data.createdAt);
+          }
+        }
+
         return {
           id: d.id,
           imageUrl: data.imageUrl,
@@ -87,6 +129,7 @@ export default function CreatorPanelPage() {
           earningsDownload: data.earningsDownload ?? 0,
           purchasesView: data.purchasesView ?? 0,
           purchasesDownload: data.purchasesDownload ?? 0,
+          createdAt,
         };
       });
       setPhotos(list);
@@ -96,6 +139,30 @@ export default function CreatorPanelPage() {
       setLoadingPhotos(false);
     }
   }
+
+  // 👉 Nombre que se muestra en el header
+  const displayName = useMemo(() => {
+    if (profile?.displayName && profile.displayName.trim() !== "") {
+      return profile.displayName;
+    }
+    if (user?.email) return user.email;
+    return "creador";
+  }, [profile, user]);
+
+  // 👉 Iniciales para el avatar si no hay foto
+  const creatorInitials = useMemo(() => {
+    const base = profile?.displayName || user?.email || "U";
+    const clean = base.trim();
+    if (!clean) return "U";
+    const parts = clean.split(/[ @.]+/).filter(Boolean);
+    if (parts.length === 1) {
+      return parts[0].charAt(0).toUpperCase();
+    }
+    return (
+      parts[0].charAt(0).toUpperCase() +
+      parts[1].charAt(0).toUpperCase()
+    );
+  }, [profile, user]);
 
   // 👉 Totales de ganancias
   const totals = useMemo(() => {
@@ -115,11 +182,36 @@ export default function CreatorPanelPage() {
     return { totalEarnings, totalViews, totalDownloads };
   }, [photos]);
 
-  // 👉 Manejar subida de foto (Cloudinary + Firestore)
+  // 👉 cuántas fotos ha subido hoy este usuario
+  function countTodayUploads(): number {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return photos.filter((p) => {
+      if (!p.createdAt) return false;
+      const d = new Date(p.createdAt);
+      const sameDay =
+        d.getFullYear() === today.getFullYear() &&
+        d.getMonth() === today.getMonth() &&
+        d.getDate() === today.getDate();
+      return sameDay;
+    }).length;
+  }
+
+  // 👉 Manejar subida de foto (Cloudinary + Firestore) con límite de 2 al día
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!user) {
       alert("Debes iniciar sesión.");
+      return;
+    }
+
+    // 🔒 Límite de 2 fotos por día
+    const uploadsToday = countTodayUploads();
+    if (uploadsToday >= 2) {
+      setFormError(
+        "Ya alcanzaste el límite de 2 fotos por hoy. Vuelve a intentarlo mañana."
+      );
       return;
     }
 
@@ -167,6 +259,8 @@ export default function CreatorPanelPage() {
       const data = await res.json();
       const imageUrl = data.secure_url as string;
 
+      const now = new Date();
+
       // 2) Guardar en Firestore
       const docRef = await addDoc(collection(db, "photos"), {
         userId: user.uid,
@@ -179,7 +273,7 @@ export default function CreatorPanelPage() {
         earningsDownload: 0,
         purchasesView: 0,
         purchasesDownload: 0,
-        createdAt: new Date(),
+        createdAt: now,
       });
 
       // 3) Actualizar UI sin recargar
@@ -193,6 +287,7 @@ export default function CreatorPanelPage() {
         earningsDownload: 0,
         purchasesView: 0,
         purchasesDownload: 0,
+        createdAt: now,
       };
 
       setPhotos((prev) => [newPhoto, ...prev]);
@@ -260,20 +355,37 @@ export default function CreatorPanelPage() {
         {/* HEADER */}
         <header className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-lg">
-              MF
+            {/* Avatar del creador */}
+            <div className="h-10 w-10 rounded-full bg-emerald-400 flex items-center justify-center overflow-hidden">
+              {profile?.avatarUrl ? (
+                <img
+                  src={profile.avatarUrl}
+                  alt={displayName}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="text-slate-900 font-black text-lg">
+                  {creatorInitials}
+                </span>
+              )}
             </div>
             <div className="flex flex-col">
               <span className="text-xs text-gray-400 uppercase tracking-[0.25em]">
                 Panel de creador
               </span>
               <span className="font-semibold text-sm sm:text-base">
-                Bienvenido, {user.email || "creador"}
+                Bienvenido, {displayName}
               </span>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => router.push("/panel/ajustes")}
+              className="px-3 py-1.5 rounded-full border border-slate-600 text-xs text-gray-200 hover:bg-slate-800 transition"
+            >
+              Ajustes
+            </button>
             <button
               onClick={() => router.push("/")}
               className="px-3 py-1.5 rounded-full border border-slate-600 text-xs text-gray-200 hover:bg-slate-800 transition"
@@ -334,7 +446,7 @@ export default function CreatorPanelPage() {
             </h2>
             <p className="text-[11px] text-gray-400 mb-4">
               Sube una foto, ponle precio y genera un enlace único para
-              compartir.
+              compartir. Límite: 2 fotos por día.
             </p>
 
             <form onSubmit={handleSubmit} className="space-y-3 text-sm">

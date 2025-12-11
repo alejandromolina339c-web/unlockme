@@ -2,402 +2,577 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams, useParams } from "next/navigation";
-import Image from "next/image";
-import Link from "next/link";
 import {
-  doc,
-  getDoc,
+  useParams,
+  useSearchParams,
+  useRouter,
+} from "next/navigation";
+import { db } from "@/lib/firebase";
+import {
   collection,
   query,
   where,
-  limit,
   getDocs,
+  doc,
+  getDoc,
+  addDoc,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 
-type PhotoData = {
+type PhotoDoc = {
   id: string;
-  title: string;
+  slug: string;
   imageUrl: string;
+  title: string;
   price: number;
-  hdPrice?: number;
-  creatorName?: string;
+  userId: string;
 };
 
-// 🔹 Mapea un doc de Firestore a PhotoData
-function mapPhotoDoc(snap: any): PhotoData {
-  const data = snap.data() as any;
+type CreatorProfile = {
+  displayName?: string;
+  avatarUrl?: string | null;
+};
 
-  if (!data.imageUrl) {
-    throw new Error("La foto no tiene una URL de imagen válida.");
-  }
+export default function PhotoBuyerPage() {
+  const router = useRouter();
+  const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
 
-  // 👉 Intentar sacar el precio desde varios campos y en distintos formatos
-  const candidates = [data.price, data.amount, data.mxnPrice];
-  let priceNum: number | null = null;
+  const slugOrId = params?.id;
 
-  for (const value of candidates) {
-    if (typeof value === "number") {
-      priceNum = value;
-      break;
-    }
-    if (typeof value === "string") {
-      const parsed = parseFloat(value);
-      if (!Number.isNaN(parsed)) {
-        priceNum = parsed;
-        break;
+  const [photo, setPhoto] = useState<PhotoDoc | null>(null);
+  const [creator, setCreator] = useState<CreatorProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [isUnlocked, setIsUnlocked] = useState(false);
+
+  // 👉 Estado para reportes
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+  const [reportDetails, setReportDetails] = useState("");
+  const [reportSending, setReportSending] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportMessage, setReportMessage] = useState<string | null>(null);
+
+  // key para localStorage
+  const storageKey = useMemo(() => {
+    if (!photo) return null;
+    return `unlockme_unlocked_photo_${photo.id}`;
+  }, [photo]);
+
+  // 👉 Cargar foto (y luego el perfil del creador)
+  useEffect(() => {
+    async function loadPhoto() {
+      if (!slugOrId) {
+        setError("Falta el ID de la foto.");
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        setError(null);
+
+        // 1) Buscar por slug
+        const q = query(
+          collection(db, "photos"),
+          where("slug", "==", slugOrId)
+        );
+        const snap = await getDocs(q);
+
+        let foundPhoto: PhotoDoc | null = null;
+
+        if (!snap.empty) {
+          const d = snap.docs[0];
+          const data = d.data() as any;
+          foundPhoto = {
+            id: d.id,
+            slug: data.slug ?? slugOrId,
+            imageUrl: data.imageUrl,
+            title: data.title ?? "Foto premium",
+            price: data.priceView ?? data.price ?? 0,
+            userId: data.userId,
+          };
+        } else {
+          // 2) Si no hay slug, intentamos por ID directo
+          const ref = doc(db, "photos", slugOrId);
+          const docSnap = await getDoc(ref);
+          if (docSnap.exists()) {
+            const data = docSnap.data() as any;
+            foundPhoto = {
+              id: docSnap.id,
+              slug: data.slug ?? slugOrId,
+              imageUrl: data.imageUrl,
+              title: data.title ?? "Foto premium",
+              price: data.priceView ?? data.price ?? 0,
+              userId: data.userId,
+            };
+          }
+        }
+
+        if (!foundPhoto) {
+          setError("Foto no encontrada.");
+          setLoading(false);
+          return;
+        }
+
+        setPhoto(foundPhoto);
+
+        // 3) Cargar perfil del creador
+        if (foundPhoto.userId) {
+          try {
+            const userRef = doc(db, "users", foundPhoto.userId);
+            const userSnap = await getDoc(userRef);
+            if (userSnap.exists()) {
+              const data = userSnap.data() as any;
+              setCreator({
+                displayName:
+                  (data.displayName as string | undefined) ?? undefined,
+                avatarUrl:
+                  (data.avatarUrl as string | undefined | null) ?? null,
+              });
+            } else {
+              setCreator(null);
+            }
+          } catch (err) {
+            console.error("Error cargando perfil de creador:", err);
+            setCreator(null);
+          }
+        }
+
+        setLoading(false);
+      } catch (err) {
+        console.error("Error cargando foto:", err);
+        setError("Ocurrió un error al cargar la foto.");
+        setLoading(false);
       }
     }
-  }
 
-  // Si no encontramos nada razonable, usamos un valor por defecto,
-  // pero NO rompemos la página.
-  if (priceNum === null || !Number.isFinite(priceNum) || priceNum <= 0) {
-    console.warn(
-      "Documento sin precio válido, usando precio por defecto 120. ID:",
-      snap.id,
-      data
-    );
-    priceNum = 120; // 🔹 Ajusta si quieres otro default
-  }
+    loadPhoto();
+  }, [slugOrId]);
 
-  return {
-    id: snap.id,
-    title: data.title || data.name || "Foto premium",
-    imageUrl: data.imageUrl,
-    price: priceNum,
-    hdPrice: typeof data.hdPrice === "number" ? data.hdPrice : undefined,
-    creatorName:
-      data.creatorName || data.userName || data.ownerName || "Creador",
-  };
-}
-
-// 🔹 Buscar foto por ID de documento o por slug/customId/etc.
-async function fetchPhoto(photoId: string): Promise<PhotoData> {
-  // 1) Intentar por ID directo
-  const directRef = doc(db, "photos", photoId);
-  const directSnap = await getDoc(directRef);
-
-  if (directSnap.exists()) {
-    return mapPhotoDoc(directSnap);
-  }
-
-  // 2) Intentar por campos conocidos
-  const candidates = ["slug", "customId", "shortId", "publicId"];
-
-  for (const field of candidates) {
-    const q = query(
-      collection(db, "photos"),
-      where(field, "==", photoId),
-      limit(1)
-    );
-    const qSnap = await getDocs(q);
-
-    if (!qSnap.empty) {
-      const docSnap = qSnap.docs[0];
-      return mapPhotoDoc(docSnap);
-    }
-  }
-
-  throw new Error("Foto no encontrada.");
-}
-
-export default function PhotoPage() {
-  const params = useParams();
-  const searchParams = useSearchParams();
-  const photoId = params?.id as string;
-
-  const [photo, setPhoto] = useState<PhotoData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [paying, setPaying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [unlocked, setUnlocked] = useState(false);
-
-  const status = searchParams.get("status");
-
-  const localKey = useMemo(
-    () => (photoId ? `mi-foto-unlocked-${photoId}` : ""),
-    [photoId]
-  );
-
-  // Cargar datos DESDE FIRESTORE
+  // 👉 Comprobar si ya está desbloqueada (localStorage) + status=success
   useEffect(() => {
-    if (!photoId) return;
-
-    setLoading(true);
-    setError(null);
-
-    fetchPhoto(photoId)
-      .then((data) => setPhoto(data))
-      .catch((err) => {
-        console.error("Error cargando foto:", err);
-        setError(err.message || "No se pudo cargar la foto.");
-      })
-      .finally(() => setLoading(false));
-  }, [photoId]);
-
-  // Revisar si ya estaba desbloqueada en este navegador
-  useEffect(() => {
-    if (!localKey) return;
-    const flag = localStorage.getItem(localKey);
-    if (flag === "true") {
-      setUnlocked(true);
-    }
-  }, [localKey]);
-
-  // Viene de Stripe con éxito o cancel
-  useEffect(() => {
-    if (!localKey) return;
-
-    if (status === "success") {
-      setUnlocked(true);
-      localStorage.setItem(localKey, "true");
-    }
-  }, [status, localKey]);
-
-  async function handlePay() {
     if (!photo) return;
+
+    const status = searchParams.get("status");
+    // Si venimos de un pago exitoso
+    if (status === "success") {
+      if (typeof window !== "undefined" && storageKey) {
+        window.localStorage.setItem(storageKey, "1");
+      }
+      setIsUnlocked(true);
+      return;
+    }
+
+    // Si no, revisar si ya estaba desbloqueada
+    if (typeof window !== "undefined" && storageKey) {
+      const value = window.localStorage.getItem(storageKey);
+      if (value === "1") {
+        setIsUnlocked(true);
+      }
+    }
+  }, [photo, searchParams, storageKey]);
+
+  const displayPrice = useMemo(() => {
+    if (!photo) return "";
+    return `$${photo.price} MXN`;
+  }, [photo]);
+
+  const creatorName = useMemo(() => {
+    if (creator?.displayName && creator.displayName.trim() !== "") {
+      return creator.displayName;
+    }
+    if (!photo) return "Creador";
+    // fallback neutro
+    return "Creador de UnlockMe";
+  }, [creator, photo]);
+
+  const creatorInitials = useMemo(() => {
+    const name = creatorName.trim();
+    if (!name) return "U";
+    const parts = name.split(" ").filter(Boolean);
+    if (parts.length === 1) {
+      return parts[0].charAt(0).toUpperCase();
+    }
+    return (
+      parts[0].charAt(0).toUpperCase() +
+      parts[1].charAt(0).toUpperCase()
+    );
+  }, [creatorName]);
+
+  // 👉 Flujo de pago (Stripe u otra pasarela vía /api/checkout)
+  async function handleUnlock() {
+    if (!photo) return;
+    setCheckoutLoading(true);
     setError(null);
-    setPaying(true);
 
     try {
-      // 🔹 Mandamos todos los campos que el backend podría necesitar
-      const body = {
-        photoId: photo.id,
-        amount: photo.price, // típico nombre para Stripe
-        description: photo.title,
-        price: photo.price, // nuestro campo
-        title: photo.title,
-      };
-
       const res = await fetch("/api/checkout", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          photoId: photo.id,
+          price: photo.price,
+          title: photo.title,
+        }),
       });
 
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        console.error("Respuesta de /api/checkout:", res.status, text);
-        let msg = "Error al iniciar el pago";
-        try {
-          const data = text ? JSON.parse(text) : null;
-          if (data?.error) msg = data.error;
-        } catch {
-          // no es JSON
-        }
-        throw new Error(msg);
+        const data = await res.json().catch(() => null);
+        const msg =
+          data?.error || "No se pudo iniciar el pago. Inténtalo de nuevo.";
+        setError(msg);
+        setCheckoutLoading(false);
+        return;
       }
 
       const data = await res.json();
-      if (!data.url) {
-        throw new Error("No se recibió la URL de pago.");
+      if (data.url) {
+        window.location.href = data.url as string;
+      } else {
+        setError("No se recibió la URL de pago.");
+        setCheckoutLoading(false);
       }
-
-      window.location.href = data.url;
-    } catch (err: any) {
-      console.error("handlePay error:", err);
-      setError(err.message || "No se pudo iniciar el pago.");
-      setPaying(false);
+    } catch (err) {
+      console.error("Error al iniciar checkout:", err);
+      setError("Ocurrió un error al iniciar el pago.");
+      setCheckoutLoading(false);
     }
   }
 
-  // Ver a tamaño completo (abre la imagen en otra pestaña)
-  function handleOpenFull() {
+  // 👉 Enviar reporte de contenido
+  async function handleSendReport(e: React.FormEvent) {
+    e.preventDefault();
     if (!photo) return;
-    window.open(photo.imageUrl, "_blank");
+
+    if (!reportReason.trim()) {
+      setReportError("Selecciona un motivo para el reporte.");
+      return;
+    }
+
+    setReportError(null);
+    setReportMessage(null);
+    setReportSending(true);
+
+    try {
+      await addDoc(collection(db, "reports"), {
+        photoId: photo.id,
+        photoSlug: photo.slug,
+        creatorId: photo.userId,
+        reason: reportReason.trim(),
+        details: reportDetails.trim() || null,
+        status: "pending",
+        createdAt: new Date(),
+        pageUrl:
+          typeof window !== "undefined"
+            ? window.location.href
+            : null,
+        userAgent:
+          typeof navigator !== "undefined"
+            ? navigator.userAgent
+            : null,
+      });
+
+      setReportMessage(
+        "Gracias. Tu reporte se ha enviado y será revisado por el equipo."
+      );
+      setReportReason("");
+      setReportDetails("");
+      setReportSending(false);
+    } catch (err) {
+      console.error("Error enviando reporte:", err);
+      setReportError(
+        "No se pudo enviar el reporte. Inténtalo de nuevo más tarde."
+      );
+      setReportSending(false);
+    }
   }
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      <main className="min-h-screen flex items-center justify-center bg-black text-white">
         Cargando foto...
-      </div>
+      </main>
     );
   }
 
-  if (error && !photo) {
+  if (error || !photo) {
     return (
-      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4">
-        <p>{error}</p>
-        <Link
-          href="/"
-          className="px-4 py-2 rounded-full bg-emerald-400 text-slate-900 font-semibold"
-        >
-          Volver al inicio
-        </Link>
-      </div>
-    );
-  }
-
-  if (!photo) {
-    return (
-      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4">
-        <p>Foto no encontrada.</p>
-        <Link
-          href="/"
-          className="px-4 py-2 rounded-full bg-emerald-400 text-slate-900 font-semibold"
-        >
-          Volver al inicio
-        </Link>
-      </div>
+      <main className="min-h-screen flex items-center justify-center bg-black text-white px-4">
+        <div className="max-w-md text-center">
+          <h1 className="text-xl font-semibold mb-2">
+            {error || "Foto no encontrada"}
+          </h1>
+          <p className="text-sm text-gray-400 mb-4">
+            Es posible que el enlace esté mal escrito o que el contenido ya
+            no esté disponible.
+          </p>
+          <button
+            onClick={() => router.push("/")}
+            className="px-4 py-2 rounded-full bg-emerald-400 text-slate-900 text-sm font-semibold hover:bg-emerald-300 transition"
+          >
+            Volver al inicio
+          </button>
+        </div>
+      </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
-      <div className="max-w-4xl mx-auto px-4 py-6 flex flex-col gap-4">
-        {/* Header */}
-        <header className="flex items-center justify-between mb-2">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-xl bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-sm">
-              MF
-            </div>
-            <span className="text-sm font-semibold">Mi-Foto</span>
-          </Link>
-
-          <Link
-            href="/login"
-            className="text-xs sm:text-sm text-gray-300 hover:text-white"
-          >
-            Entrar como creador
-          </Link>
-        </header>
-
-        {/* Banner de estado pago */}
-        {status === "success" && (
-          <div className="rounded-xl border border-emerald-500/60 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-200">
-            ✅ Pago recibido. Esta foto ha sido desbloqueada en este
-            navegador. Puedes verla siempre sin volver a pagar.
-          </div>
-        )}
-
-        {status === "cancel" && (
-          <div className="rounded-xl border border-slate-600 bg-slate-900/70 px-4 py-2 text-xs text-gray-300">
-            El pago fue cancelado. Puedes intentarlo de nuevo cuando
-            quieras.
-          </div>
-        )}
-
-        {/* Contenido principal */}
-        <section className="grid md:grid-cols-2 gap-8 items-start mt-2">
-          {/* Imagen */}
-          <div className="relative w-full aspect-[3/4] rounded-2xl bg-slate-900 overflow-hidden border border-slate-700/60 shadow-2xl">
-            <Image
-              src={photo.imageUrl}
-              alt={photo.title}
-              fill
-              className={`object-cover transition-all duration-500 ${
-                unlocked ? "blur-0" : "blur-xl scale-105"
-              }`}
-            />
-
-            {!unlocked && (
-              <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm flex flex-col items-center justify-center text-center px-4">
-                <p className="text-xs text-emerald-200 mb-1 uppercase tracking-[0.2em]">
-                  Foto premium
-                </p>
-                <h1 className="text-lg font-semibold mb-2">
-                  Desbloquea para ver la imagen completa
-                </h1>
-                <p className="text-xs text-gray-300 mb-4 max-w-xs">
-                  Una vez desbloquees esta foto, podrás verla siempre
-                  desde este navegador sin volver a pagar.
-                </p>
-                <button
-                  onClick={handlePay}
-                  disabled={paying}
-                  className="inline-flex items-center justify-center px-5 py-2 rounded-full bg-emerald-400 text-slate-900 text-sm font-semibold hover:bg-emerald-300 transition disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {paying
-                    ? "Redirigiendo al pago..."
-                    : `Desbloquear por $${photo.price} MXN`}
-                </button>
-                <p className="mt-2 text-[10px] text-gray-400">
-                  Pago seguro con tarjeta. No necesitas crear cuenta como
-                  comprador.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Info */}
-          <div className="flex flex-col gap-4">
-            <div>
-              <p className="text-xs text-emerald-300 uppercase tracking-[0.25em] mb-1">
-                Contenido premium
-              </p>
-              <h2 className="text-2xl font-bold mb-1">
-                {photo.title || "Foto exclusiva"}
-              </h2>
-              {photo.creatorName && (
-                <p className="text-sm text-gray-300">
-                  Creado por{" "}
-                  <span className="font-semibold">
-                    {photo.creatorName}
-                  </span>
-                </p>
+    <main className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-black text-white">
+      <div className="max-w-4xl mx-auto px-4 py-6 flex flex-col gap-6">
+        {/* Header: info del creador */}
+        <header className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="h-12 w-12 rounded-full bg-emerald-400 flex items-center justify-center overflow-hidden">
+              {creator?.avatarUrl ? (
+                <img
+                  src={creator.avatarUrl}
+                  alt={creatorName}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="text-slate-900 font-bold text-lg">
+                  {creatorInitials}
+                </span>
               )}
             </div>
+            <div className="flex flex-col">
+              <span className="text-xs text-gray-400 uppercase tracking-[0.25em]">
+                Contenido premium
+              </span>
+              <span className="text-sm sm:text-base font-semibold">
+                {creatorName}
+              </span>
+            </div>
+          </div>
 
-            <div className="rounded-2xl bg-slate-900/70 border border-slate-700/60 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-gray-400">Precio</p>
-                  <p className="text-xl font-bold">
-                    ${photo.price}{" "}
-                    <span className="text-xs text-gray-400">MXN</span>
+          <button
+            onClick={() => router.push("/")}
+            className="px-3 py-1.5 rounded-full border border-slate-600 text-xs text-gray-200 hover:bg-slate-800 transition"
+          >
+            Ir al inicio
+          </button>
+        </header>
+
+        {/* Contenido principal */}
+        <section className="grid md:grid-cols-2 gap-6 items-start">
+          {/* Foto */}
+          <div className="rounded-2xl border border-slate-700 bg-slate-900/80 p-3 sm:p-4">
+            <div className="relative rounded-xl overflow-hidden bg-slate-800 min-h-[260px] flex items-center justify-center">
+              <img
+                src={photo.imageUrl}
+                alt={photo.title}
+                className={`w-full h-full object-cover transition-all duración-500 ${
+                  isUnlocked ? "" : "blur-xl scale-105"
+                }`}
+              />
+              {!isUnlocked && (
+                <div className="absolute inset-0 bg-slate-950/60" />
+              )}
+
+              {!isUnlocked && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
+                  <p className="text-sm font-semibold mb-1">
+                    Foto premium bloqueada
+                  </p>
+                  <p className="text-xs text-gray-300 mb-3">
+                    Desbloquea para ver la imagen completa en alta calidad.
+                  </p>
+                  <span className="inline-flex items-center rounded-full bg-black/40 border border-emerald-300/60 px-3 py-1 text-[11px] text-emerald-200 mb-1">
+                    {displayPrice} · pago único
+                  </span>
+                  <p className="text-[11px] text-gray-400 max-w-xs">
+                    No necesitas crear cuenta. Pagas, desbloqueas y ves la
+                    foto directamente desde este enlace.
                   </p>
                 </div>
-                <button
-                  onClick={handlePay}
-                  disabled={paying || unlocked}
-                  className="px-4 py-2 rounded-full bg-emerald-400 text-slate-900 text-sm font-semibold hover:bg-emerald-300 transition disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {unlocked
-                    ? "Ya desbloqueada"
-                    : paying
-                    ? "Redirigiendo..."
-                    : "Desbloquear ahora"}
-                </button>
-              </div>
+              )}
+            </div>
+          </div>
 
-              <p className="text-xs text-gray-400">
-                Al desbloquear, podrás volver a ver esta foto desde este
-                navegador sin volver a pagar. El contenido pertenece al
-                creador; evita redistribuirlo sin permiso.
+          {/* Info y acciones */}
+          <div className="flex flex-col gap-4">
+            <div>
+              <h1 className="text-lg sm:text-xl font-semibold mb-2">
+                {photo.title || "Foto premium"}
+              </h1>
+              <p className="text-sm text-gray-300 mb-1">
+                Contenido visual exclusivo compartido a través de UnlockMe.
+              </p>
+              <p className="text-xs text-gray-500">
+                Por seguridad, no recomendamos hacer capturas o reenviar
+                contenido sin permiso del creador.
               </p>
             </div>
 
-            {unlocked && (
-              <div className="rounded-2xl bg-slate-900/60 border border-slate-700/60 p-4 space-y-3">
-                <p className="text-sm font-semibold">
-                  Foto desbloqueada ✅
-                </p>
-                <p className="text-xs text-gray-400">
-                  Ya puedes ver esta foto siempre desde este navegador. Si
-                  cierras y vuelves a entrar con el mismo enlace, seguirá
-                  desbloqueada.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={handleOpenFull}
-                    className="inline-flex items-center px-4 py-1.5 rounded-full border border-slate-600 text-xs text-gray-200 hover:bg-slate-800 transition"
-                  >
-                    Ver a tamaño completo
-                  </button>
+            <div className="rounded-2xl border border-slate-700 bg-slate-900/80 p-3 sm:p-4 flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col">
+                  <span className="text-xs text-gray-400">
+                    Precio de desbloqueo
+                  </span>
+                  <span className="text-lg font-bold text-emerald-300">
+                    {displayPrice}
+                  </span>
                 </div>
               </div>
-            )}
 
-            {error && (
-              <p className="text-xs text-red-400 bg-red-950/40 border border-red-800/40 rounded-xl px-3 py-2">
-                {error}
+              {error && (
+                <p className="text-xs text-red-400">{error}</p>
+              )}
+
+              {!isUnlocked ? (
+                <button
+                  type="button"
+                  onClick={handleUnlock}
+                  disabled={checkoutLoading}
+                  className="mt-1 w-full inline-flex items-center justify-center px-4 py-2.5 rounded-full bg-emerald-400 text-slate-900 text-sm font-semibold hover:bg-emerald-300 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {checkoutLoading
+                    ? "Redirigiendo al pago..."
+                    : "Desbloquear foto"}
+                </button>
+              ) : (
+                <div className="mt-1 w-full inline-flex items-center justify-center px-4 py-2.5 rounded-full bg-emerald-400/10 border border-emerald-400/60 text-emerald-200 text-sm font-semibold">
+                  Foto desbloqueada ✔
+                </div>
+              )}
+
+              <p className="text-[11px] text-gray-500">
+                Pagos procesados de forma segura por la pasarela de pago
+                (modo beta). UnlockMe no comparte tus datos de tarjeta con
+                el creador.
               </p>
-            )}
+            </div>
+
+            {/* Botón de reportar contenido */}
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setReportOpen(true);
+                  setReportError(null);
+                  setReportMessage(null);
+                }}
+                className="self-start text-[11px] text-gray-400 hover:text-red-300 underline-offset-2 hover:underline"
+              >
+                ¿Ves algo raro en esta foto? Reportar contenido
+              </button>
+              <p className="text-[10px] text-gray-500">
+                Usamos los reportes para detectar contenido que pueda
+                violar nuestras reglas: menores de edad, contenido ilegal,
+                suplantación de identidad, etc.
+              </p>
+            </div>
           </div>
         </section>
+
+        {/* Modal de reporte */}
+        {reportOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+            <div className="w-full max-w-md rounded-2xl bg-slate-950 border border-slate-700 p-4 sm:p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold">
+                  Reportar esta foto
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setReportOpen(false)}
+                  className="text-xs text-gray-400 hover:text-gray-200"
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              <form
+                onSubmit={handleSendReport}
+                className="space-y-3 text-sm"
+              >
+                <div>
+                  <label className="block text-xs text-gray-300 mb-1">
+                    Motivo del reporte
+                  </label>
+                  <select
+                    value={reportReason}
+                    onChange={(e) => setReportReason(e.target.value)}
+                    className="w-full rounded-lg bg-slate-950/70 border border-slate-700 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400"
+                  >
+                    <option value="">Selecciona una opción</option>
+                    <option value="minor">
+                      Sospecha de menor de edad
+                    </option>
+                    <option value="illegal">
+                      Contenido ilegal o no consensuado
+                    </option>
+                    <option value="impersonation">
+                      Suplantación de identidad
+                    </option>
+                    <option value="copyright">
+                      Infringe derechos de autor
+                    </option>
+                    <option value="other">Otro</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-300 mb-1">
+                    Detalles (opcional)
+                  </label>
+                  <textarea
+                    value={reportDetails}
+                    onChange={(e) =>
+                      setReportDetails(e.target.value)
+                    }
+                    rows={3}
+                    className="w-full rounded-lg bg-slate-950/70 border border-slate-700 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400 resize-none"
+                    placeholder="Explica brevemente qué te preocupa de este contenido."
+                  />
+                </div>
+
+                {reportError && (
+                  <p className="text-xs text-red-400">
+                    {reportError}
+                  </p>
+                )}
+                {reportMessage && (
+                  <p className="text-xs text-emerald-300">
+                    {reportMessage}
+                  </p>
+                )}
+
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setReportOpen(false)}
+                    className="text-xs text-gray-400 hover:text-gray-200"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={reportSending}
+                    className="px-4 py-2 rounded-full bg-emerald-400 text-slate-900 text-xs font-semibold hover:bg-emerald-300 transición disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {reportSending
+                      ? "Enviando reporte..."
+                      : "Enviar reporte"}
+                  </button>
+                </div>
+
+                <p className="mt-2 text-[10px] text-gray-500">
+                  No usaremos tu reporte para atacar al creador. Solo lo
+                  revisaremos para proteger a menores, prevenir delitos y
+                  mantener la plataforma dentro de la ley.
+                </p>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );

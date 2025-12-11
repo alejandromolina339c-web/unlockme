@@ -80,6 +80,49 @@ export default function TerminosPage() {
               necesario, reportar actividades sospechosas a las
               autoridades competentes.
             </p>
+
+            {/* 3.1 Contenido generado con IA */}
+            <div className="mt-4 border-t border-gray-700 pt-3">
+              <h3 className="text-base font-semibold mb-2">
+                3.1 Contenido generado con inteligencia artificial (IA)
+              </h3>
+              <p>
+                UnlockMe permite contenido parcial o totalmente generado
+                mediante herramientas de inteligencia artificial, siempre
+                que cumpla con las mismas reglas anteriores y con las
+                leyes aplicables.
+              </p>
+              <p className="mt-2">
+                Está estrictamente prohibido subir contenido generado con
+                IA que:
+              </p>
+              <ul className="list-disc list-inside mt-2 space-y-1">
+                <li>
+                  Represente o parezca representar a menores de 18 años,
+                  aunque el personaje sea ficticio o generado por IA.
+                </li>
+                <li>
+                  Utilice el rostro, nombre, voz o identidad de una
+                  persona real sin su consentimiento expreso (deepfakes).
+                </li>
+                <li>
+                  Infrinja derechos de autor, marcas registradas u otros
+                  derechos de terceros.
+                </li>
+                <li>
+                  Sea claramente ilegal, engañoso, difamatorio o
+                  destinado a dañar a otra persona.
+                </li>
+              </ul>
+              <p className="mt-2">
+                Al subir contenido generado con IA, declaras que tienes
+                derecho a usar las imágenes, datos o referencias que hayas
+                utilizado para crearlo, y que asumes toda la
+                responsabilidad legal por dicho contenido. UnlockMe podrá
+                eliminar cualquier contenido de IA que considere riesgoso
+                o contrario a estos Términos.
+              </p>
+            </div>
           </section>
 
           <section>
