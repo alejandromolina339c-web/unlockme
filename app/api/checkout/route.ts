@@ -1,7 +1,26 @@
 // app/api/checkout/route.ts
 import { NextResponse } from "next/server";
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+// Normalizamos la URL base de la app
+function getBaseUrl() {
+  // Lo que venga del entorno o localhost como fallback para dev
+  const raw = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
+  // Quitamos espacios
+  let url = raw.trim();
+
+  // Si NO empieza con http o https, le agregamos https://
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url}`;
+  }
+
+  // Quitamos cualquier / extra al final
+  url = url.replace(/\/+$/, "");
+
+  return url;
+}
+
+const baseUrl = getBaseUrl();
 
 export async function POST(req: Request) {
   const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
@@ -58,9 +77,9 @@ export async function POST(req: Request) {
             },
           ],
           back_urls: {
-            success: `${appUrl}/mi-foto/${photoId}?status=success`,
-            failure: `${appUrl}/mi-foto/${photoId}?status=failure`,
-            pending: `${appUrl}/mi-foto/${photoId}?status=pending`,
+            success: `${baseUrl}/mi-foto/${photoId}?status=success`,
+            failure: `${baseUrl}/mi-foto/${photoId}?status=failure`,
+            pending: `${baseUrl}/mi-foto/${photoId}?status=pending`,
           },
           auto_return: "approved",
           external_reference: photoId,
