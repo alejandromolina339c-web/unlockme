@@ -1,23 +1,21 @@
 // app/api/checkout/route.ts
 import { NextResponse } from "next/server";
 
-// Normalizamos la URL base de la app
+// Normalizamos y forzamos HTTPS en la URL base de la app
 function getBaseUrl() {
-  // Lo que venga del entorno o localhost como fallback para dev
   const raw = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
   // Quitamos espacios
   let url = raw.trim();
 
-  // Si NO empieza con http o https, le agregamos https://
-  if (!/^https?:\/\//i.test(url)) {
-    url = `https://${url}`;
-  }
+  // Quitamos cualquier esquema (http:// o https://)
+  url = url.replace(/^https?:\/\//i, "");
 
-  // Quitamos cualquier / extra al final
+  // Quitamos barras extra al final
   url = url.replace(/\/+$/, "");
 
-  return url;
+  // Forzamos https:// delante
+  return `https://${url}`;
 }
 
 const baseUrl = getBaseUrl();
@@ -95,8 +93,16 @@ export async function POST(req: Request) {
         mpRes.status,
         JSON.stringify(mpData, null, 2)
       );
+
+      const humanMessage =
+        (mpData &&
+          (mpData.message ||
+            (typeof mpData.error === "string" ? mpData.error : null))) ||
+        "Error con la pasarela de pago.";
+
+      // 👈 Ahora devolvemos el mensaje real de Mercado Pago al front
       return NextResponse.json(
-        { error: "Error con la pasarela de pago." },
+        { error: humanMessage },
         { status: 500 }
       );
     }
