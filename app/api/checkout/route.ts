@@ -1,5 +1,14 @@
 // app/api/checkout/route.ts
 import { NextResponse } from "next/server";
+import { db } from "@/lib/firebase";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  doc,
+  getDoc,
+} from "firebase/firestore";
 
 // Normalizamos y forzamos HTTPS en la URL base de la app
 function getBaseUrl() {
@@ -20,6 +29,11 @@ function getBaseUrl() {
 
 const baseUrl = getBaseUrl();
 
+type CheckoutBody = {
+  photoId: string;          // slug o id del documento
+  mode?: "view" | "download"; // futuro: ver vs descargar (opcional)
+};
+
 export async function POST(req: Request) {
   const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
 
@@ -33,29 +47,74 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json().catch(() => null);
+    const body = (await req.json().catch(() => null)) as CheckoutBody | null;
 
-    if (!body || !body.photoId || !body.price || !body.title) {
+    // 👇 Solo exigimos photoId (ya no price/title)
+    if (!body || !body.photoId) {
       return NextResponse.json(
         { error: "Faltan datos para crear el checkout" },
         { status: 400 }
       );
     }
 
-    const { photoId, price, title } = body as {
-      photoId: string;
-      price: number;
-      title: string;
-    };
+    const { photoId, mode } = body;
 
-    if (!price || price <= 0) {
+    // 1️⃣ Buscar la foto en Firestore por slug
+    const photosRef = collection(db, "photos");
+    const slugQuery = query(photosRef, where("slug", "==", photoId));
+    const slugSnap = await getDocs(slugQuery);
+
+    let photoDoc = slugSnap.docs[0] || null;
+
+    // Si no la encontramos por slug, probamos por ID de documento
+    if (!photoDoc) {
+      const byIdRef = doc(db, "photos", photoId);
+      const byIdSnap = await getDoc(byIdRef);
+      if (byIdSnap.exists()) {
+        photoDoc = byIdSnap;
+      }
+    }
+
+    if (!photoDoc) {
+      console.error("Foto no encontrada para checkout:", photoId);
       return NextResponse.json(
-        { error: "Precio inválido" },
+        { error: "Foto no encontrada." },
+        { status: 404 }
+      );
+    }
+
+    const data = photoDoc.data() as any;
+
+    // 2️⃣ Determinar el precio SOLO desde Firestore (no confiamos en el cliente)
+    const rawPriceView = Number(data.priceView ?? 0);
+    const rawPriceDownload = Number(data.priceDownload ?? 0);
+
+    const isDownload = mode === "download";
+
+    let finalPrice = rawPriceView;
+    let concept = (data.title as string | undefined) || "Foto premium";
+
+    if (isDownload) {
+      // Si es descarga y hay precio de descarga, lo usamos;
+      // si no, usamos el de ver como fallback.
+      finalPrice =
+        rawPriceDownload > 0 ? rawPriceDownload : rawPriceView;
+      concept = `${concept} (descarga)`;
+    }
+
+    if (!finalPrice || finalPrice <= 0) {
+      console.error(
+        "Precio inválido en Firestore para photoId:",
+        photoId,
+        data
+      );
+      return NextResponse.json(
+        { error: "La foto no tiene un precio válido configurado." },
         { status: 400 }
       );
     }
 
-    // 🧾 Llamamos directamente a la API de Mercado Pago
+    // 3️⃣ Crear preferencia en Mercado Pago vía API HTTP
     const mpRes = await fetch(
       "https://api.mercadopago.com/checkout/preferences",
       {
@@ -67,10 +126,10 @@ export async function POST(req: Request) {
         body: JSON.stringify({
           items: [
             {
-              id: photoId,
-              title: title || "Foto premium",
+              id: photoDoc.id,         // id interno del doc
+              title: concept,          // título final
               quantity: 1,
-              unit_price: Number(price),
+              unit_price: finalPrice,  // precio real desde Firestore
               currency_id: "MXN",
             },
           ],
@@ -80,7 +139,7 @@ export async function POST(req: Request) {
             pending: `${baseUrl}/mi-foto/${photoId}?status=pending`,
           },
           auto_return: "approved",
-          external_reference: photoId,
+          external_reference: photoDoc.id,
         }),
       }
     );
@@ -96,11 +155,12 @@ export async function POST(req: Request) {
 
       const humanMessage =
         (mpData &&
-          (mpData.message ||
-            (typeof mpData.error === "string" ? mpData.error : null))) ||
+          ((mpData as any).message ||
+            (typeof (mpData as any).error === "string"
+              ? (mpData as any).error
+              : null))) ||
         "Error con la pasarela de pago.";
 
-      // 👈 Ahora devolvemos el mensaje real de Mercado Pago al front
       return NextResponse.json(
         { error: humanMessage },
         { status: 500 }
@@ -120,7 +180,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Igual que antes: devolvemos { url } para que el front redirija
+    // ✅ Devolvemos solo la URL de pago
     return NextResponse.json({ url });
   } catch (err: any) {
     console.error(
