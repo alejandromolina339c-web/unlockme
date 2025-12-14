@@ -30,8 +30,23 @@ function getBaseUrl() {
 const baseUrl = getBaseUrl();
 
 type CheckoutBody = {
-  photoId: string;          // slug o id del documento
-  mode?: "view" | "download"; // futuro: ver vs descargar (opcional)
+  photoId: string; // slug o id del documento
+  mode?: "view" | "download";
+};
+
+type PhotoData = {
+  title?: string;
+  priceView?: number;
+  priceDownload?: number;
+  [key: string]: unknown;
+};
+
+type MPResponse = {
+  message?: string;
+  error?: string;
+  init_point?: string;
+  sandbox_init_point?: string;
+  [key: string]: unknown;
 };
 
 export async function POST(req: Request) {
@@ -49,7 +64,7 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json().catch(() => null)) as CheckoutBody | null;
 
-    // 👇 Solo exigimos photoId (ya no price/title)
+    // Solo exigimos photoId (ya no price/title)
     if (!body || !body.photoId) {
       return NextResponse.json(
         { error: "Faltan datos para crear el checkout" },
@@ -83,7 +98,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const data = photoDoc.data() as any;
+    const data = photoDoc.data() as PhotoData;
 
     // 2️⃣ Determinar el precio SOLO desde Firestore (no confiamos en el cliente)
     const rawPriceView = Number(data.priceView ?? 0);
@@ -92,11 +107,10 @@ export async function POST(req: Request) {
     const isDownload = mode === "download";
 
     let finalPrice = rawPriceView;
-    let concept = (data.title as string | undefined) || "Foto premium";
+    let concept = data.title || "Foto premium";
 
     if (isDownload) {
-      // Si es descarga y hay precio de descarga, lo usamos;
-      // si no, usamos el de ver como fallback.
+      // Si es descarga y hay precio de descarga, lo usamos; si no, usamos el de ver
       finalPrice =
         rawPriceDownload > 0 ? rawPriceDownload : rawPriceView;
       concept = `${concept} (descarga)`;
@@ -126,10 +140,10 @@ export async function POST(req: Request) {
         body: JSON.stringify({
           items: [
             {
-              id: photoDoc.id,         // id interno del doc
-              title: concept,          // título final
+              id: photoDoc.id, // id interno del doc
+              title: concept,
               quantity: 1,
-              unit_price: finalPrice,  // precio real desde Firestore
+              unit_price: finalPrice,
               currency_id: "MXN",
             },
           ],
@@ -144,7 +158,7 @@ export async function POST(req: Request) {
       }
     );
 
-    const mpData = await mpRes.json().catch(() => null);
+    const mpData = (await mpRes.json().catch(() => null)) as MPResponse | null;
 
     if (!mpRes.ok) {
       console.error(
@@ -154,11 +168,7 @@ export async function POST(req: Request) {
       );
 
       const humanMessage =
-        (mpData &&
-          ((mpData as any).message ||
-            (typeof (mpData as any).error === "string"
-              ? (mpData as any).error
-              : null))) ||
+        (mpData && (mpData.message || mpData.error)) ||
         "Error con la pasarela de pago.";
 
       return NextResponse.json(
@@ -167,10 +177,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const url =
-      (mpData as any).init_point ||
-      (mpData as any).sandbox_init_point ||
-      null;
+    const url = mpData?.init_point || mpData?.sandbox_init_point || null;
 
     if (!url) {
       console.error("Preferencia creada sin init_point:", mpData);
@@ -182,11 +189,8 @@ export async function POST(req: Request) {
 
     // ✅ Devolvemos solo la URL de pago
     return NextResponse.json({ url });
-  } catch (err: any) {
-    console.error(
-      "Error en /api/checkout con Mercado Pago:",
-      typeof err === "object" ? JSON.stringify(err, null, 2) : err
-    );
+  } catch (err: unknown) {
+    console.error("Error en /api/checkout con Mercado Pago:", err);
     return NextResponse.json(
       { error: "Error interno al crear el checkout" },
       { status: 500 }

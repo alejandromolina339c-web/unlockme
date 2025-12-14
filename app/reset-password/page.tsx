@@ -1,94 +1,87 @@
-// app/reset-password/page.tsx
 "use client";
 
+import type React from "react";
 import { useState } from "react";
-import Link from "next/link";
-import { resetPassword } from "@/lib/auth";
+import { sendPasswordResetEmail } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 
 export default function ResetPasswordPage() {
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<null | "ok" | "error">(null);
+  const [sending, setSending] = useState(false);
   const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
-  async function handleSubmit(e: React.FormEvent) {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setStatus(null);
     setMessage("");
-    setLoading(true);
+    setErrorMsg("");
+
+    if (!email.trim()) {
+      setErrorMsg("Ingresa tu correo electrónico.");
+      return;
+    }
 
     try {
-      await resetPassword(email);
-      setStatus("ok");
+      setSending(true);
+      await sendPasswordResetEmail(auth, email.trim());
       setMessage(
-        "Si existe una cuenta con este correo, se ha enviado un enlace para restablecer la contraseña."
+        "Si el correo está registrado, recibirás un enlace para restablecer tu contraseña."
       );
-    } catch (err: any) {
-      console.error("Error al enviar correo de reset:", err);
-      setStatus("error");
-      setMessage(
-        "No se pudo enviar el correo de recuperación. Revisa el correo o inténtalo más tarde."
-      );
+    } catch (err) {
+      console.error("Error al enviar correo de recuperación:", err);
+      setErrorMsg("No se pudo enviar el correo. Intenta de nuevo.");
     } finally {
-      setLoading(false);
+      setSending(false);
     }
-  }
+  };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-black text-white px-4">
-      <form
-        onSubmit={handleSubmit}
-        className="bg-gray-900 p-6 rounded-xl shadow-md w-full max-w-xs"
-      >
-        <h2 className="text-xl font-bold mb-3 text-center">
-          Recuperar contraseña
-        </h2>
-        <p className="text-[11px] text-gray-400 mb-4 text-center">
-          Ingresa el correo con el que te registraste. Te enviaremos un
-          enlace para restablecer tu contraseña.
-        </p>
+    <main className="min-h-screen bg-gradient-to-br from-slate-900 via-black to-slate-950 text-white flex items-center justify-center px-4">
+      <div className="w-full max-w-md bg-slate-900/80 border border-slate-700 rounded-2xl p-6 shadow-xl">
+        <h1 className="text-2xl font-bold mb-4 text-center">
+          Restablecer contraseña
+        </h1>
 
-        {status === "ok" && (
-          <p className="text-emerald-300 text-xs mb-2 text-center">
-            {message}
-          </p>
-        )}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs text-gray-300 mb-1">
+              Correo electrónico
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                setEmail(e.target.value)
+              }
+              className="w-full rounded-lg bg-slate-950/70 border border-slate-700 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400"
+              placeholder="tu-correo@ejemplo.com"
+            />
+          </div>
 
-        {status === "error" && (
-          <p className="text-red-400 text-xs mb-2 text-center">
-            {message}
-          </p>
-        )}
+          {errorMsg && (
+            <p className="text-xs text-red-400">{errorMsg}</p>
+          )}
 
-        <div className="mb-4">
-          <input
-            type="email"
-            placeholder="Tu correo"
-            className="w-full p-2 rounded text-black text-sm outline-none"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </div>
+          {message && (
+            <p className="text-xs text-emerald-300">{message}</p>
+          )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-white text-black py-2 rounded font-semibold text-sm hover:bg-gray-300 transition disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          {loading ? "Enviando..." : "Enviar enlace"}
-        </button>
-
-        <p className="mt-4 text-center text-[11px] text-gray-400">
-          ¿Recordaste tu contraseña?{" "}
-          <Link
-            href="/login"
-            className="text-emerald-300 hover:text-emerald-200"
+          <button
+            type="submit"
+            disabled={sending}
+            className="w-full mt-2 inline-flex items-center justify-center px-4 py-2.5 rounded-full bg-emerald-400 text-slate-900 text-sm font-semibold hover:bg-emerald-300 transition disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            Volver a iniciar sesión
-          </Link>
+            {sending ? "Enviando..." : "Enviar enlace de recuperación"}
+          </button>
+        </form>
+
+        <p className="mt-4 text-[11px] text-gray-400 text-center">
+          ¿Ya la recordaste?{" "}
+          <a href="/login" className="text-emerald-300 underline">
+            Volver al login
+          </a>
         </p>
-      </form>
-    </div>
+      </div>
+    </main>
   );
 }
