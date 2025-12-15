@@ -4,6 +4,7 @@ import { getAdminDb } from "@/lib/firebaseAdmin";
 
 // ✅ Recomendado: pon un token secreto en la URL del webhook para seguridad extra.
 // Ej: https://unlockme.com.mx/api/mercadopago/webhook?token=TU_TOKEN
+
 // Env requerida:
 // - MERCADOPAGO_ACCESS_TOKEN  (ya la tienes)
 // - MERCADOPAGO_WEBHOOK_TOKEN (nuevo, solo server)
