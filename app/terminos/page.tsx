@@ -235,12 +235,9 @@ export default function TerminosPage() {
               funcionamiento de la plataforma, puedes escribir a:
             </p>
             <p className="mt-1 text-emerald-300">
-              soportemx74@unlockme.app
+              soportemx74@gmail.com
             </p>
-            <p className="mt-2 text-xs text-gray-500">
-              (Sustituye este correo por el que vayas a usar
-              realmente para soporte legal y atención a usuarios.)
-            </p>
+            
           </section>
         </div>
       </div>
