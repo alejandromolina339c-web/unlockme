@@ -2,13 +2,6 @@
 import { NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 
-// ✅ Recomendado: pon un token secreto en la URL del webhook para seguridad extra.
-// Ej: https://unlockme.com.mx/api/mercadopago/webhook?token=TU_TOKEN
-
-// Env requerida:
-// - MERCADOPAGO_ACCESS_TOKEN  (ya la tienes)
-// - MERCADOPAGO_WEBHOOK_TOKEN (nuevo, solo server)
-
 function getPaymentIdFromRequest(reqUrl: string, body: any) {
   const url = new URL(reqUrl);
 
@@ -32,9 +25,8 @@ function getTokenFromRequest(reqUrl: string) {
   return (url.searchParams.get("token") || "").trim();
 }
 
-export async function GET(req: Request) {
-  // Algunos proveedores hacen GET de “healthcheck”.
-  // Respondemos OK sin hacer nada.
+export async function GET() {
+  // Healthcheck simple
   return NextResponse.json({ ok: true }, { status: 200 });
 }
 
@@ -48,7 +40,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Seguridad simple y efectiva: token secreto en la URL del webhook
+    // ✅ Seguridad extra: token secreto en la URL del webhook
     const expectedToken = (process.env.MERCADOPAGO_WEBHOOK_TOKEN || "").trim();
     if (expectedToken) {
       const gotToken = getTokenFromRequest(req.url);
@@ -91,12 +83,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    // En tu checkout: external_reference = photoId
+    // En tu checkout: external_reference = photoId (PERO puede venir slug)
     const ext = String(payment?.external_reference ?? "").trim();
     if (!ext) return NextResponse.json({ ok: true }, { status: 200 });
 
     // Soporta futuro "photoId|view" o "photoId|download"
-    const [photoId, modeRaw] = ext.split("|");
+    const [photoKey, modeRaw] = ext.split("|");
     const mode = modeRaw === "download" ? "download" : "view";
 
     const paidAmount = Number(payment?.transaction_amount ?? 0);
@@ -110,8 +102,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    const photoRef = db.collection("photos").doc(photoId);
-    const photoSnap = await photoRef.get();
+    // 3) Buscar la foto:
+    //    Primero intenta por docId (photoKey)
+    //    Si no existe, intenta por slug == photoKey
+    let photoRef = db.collection("photos").doc(photoKey);
+    let photoSnap = await photoRef.get();
+
+    if (!photoSnap.exists) {
+      const q = await db
+        .collection("photos")
+        .where("slug", "==", photoKey)
+        .limit(1)
+        .get();
+
+      if (!q.empty) {
+        photoRef = q.docs[0].ref;
+        photoSnap = await photoRef.get();
+      }
+    }
 
     if (!photoSnap.exists) {
       // Guardamos el payment como procesado para evitar reintentos duplicados
@@ -127,26 +135,27 @@ export async function POST(req: Request) {
 
     const photo = photoSnap.data() as any;
 
-    // ✅ Nunca confiar en valores del cliente: usamos:
-    // - monto que reporta Mercado Pago (paidAmount)
-    // - y opcionalmente validamos contra el precio en Firestore
+    // ✅ Nunca confiar en valores del cliente: usamos monto confirmado por MP
+    // y validamos (opcional) contra precios guardados en Firestore.
     const priceView = Number(photo?.priceView ?? 0);
     const priceDownload = Number(photo?.priceDownload ?? 0);
 
-    // Si no viene mode en external_reference, inferimos por monto (por compatibilidad)
+    // Si no viene mode en external_reference, inferimos por monto (compat)
     let finalMode: "view" | "download" = mode as "view" | "download";
     if (!modeRaw) {
       const eq = (a: number, b: number) => Math.abs(a - b) < 0.01;
-      if (priceDownload > 0 && eq(paidAmount, priceDownload) && !eq(priceDownload, priceView)) {
+      if (
+        priceDownload > 0 &&
+        eq(paidAmount, priceDownload) &&
+        !eq(priceDownload, priceView)
+      ) {
         finalMode = "download";
       } else {
         finalMode = "view";
       }
     }
 
-    // Validación mínima: si el pago no coincide con el precio esperado (y existe),
-    // registramos pero NO sumamos para evitar inconsistencias.
-    // (Si cambiaste precios luego, esto puede “frenar” sumas. Si quieres, lo relajamos.)
+    // Validación mínima: si hay precio esperado y no coincide, NO sumamos (seguridad)
     const expected = finalMode === "download" ? priceDownload : priceView;
     const canValidate = expected > 0;
     const matchesExpected = !canValidate || Math.abs(paidAmount - expected) < 0.01;
@@ -170,7 +179,7 @@ export async function POST(req: Request) {
       });
 
       if (!matchesExpected) {
-        // No sumamos si no coincide (seguridad)
+        // Seguridad: no sumamos si no coincide con el precio actual guardado
         return;
       }
 
@@ -181,7 +190,6 @@ export async function POST(req: Request) {
       const purchasesView = Number(p?.purchasesView ?? 0);
       const purchasesDownload = Number(p?.purchasesDownload ?? 0);
 
-      // ✅ Sumamos con el monto confirmado por MP (paidAmount)
       tx.update(photoRef, {
         earningsView: finalMode === "view" ? earningsView + paidAmount : earningsView,
         earningsDownload:
