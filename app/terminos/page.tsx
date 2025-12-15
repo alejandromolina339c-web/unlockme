@@ -8,12 +8,7 @@ export default function TerminosPage() {
           Términos de uso de UnlockMe
         </h1>
 
-        <p className="text-sm text-gray-400 mb-6">
-          Este documento es un texto general de referencia y no constituye
-          asesoría legal. Te recomendamos revisarlo con un abogado antes de
-          lanzar la plataforma al público.
-        </p>
-
+       
         <div className="space-y-6 text-sm leading-relaxed text-gray-200">
           <section>
             <h2 className="text-lg font-semibold mb-2">
