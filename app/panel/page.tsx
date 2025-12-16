@@ -56,6 +56,8 @@ export default function CreatorPanelPage() {
   const [priceView, setPriceView] = useState<number>(100);
   const [priceDownload, setPriceDownload] = useState<number>(130); // se mantiene, pero NO se muestra en UI
 
+  const MIN_PRICE = 70;
+
   const [uploading, setUploading] = useState(false);
   const [formError, setFormError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
@@ -174,6 +176,12 @@ export default function CreatorPanelPage() {
       return;
     }
 
+    // ✅ Mínimo $70
+    if (priceView < MIN_PRICE) {
+      setFormError(`El precio mínimo es $${MIN_PRICE} MXN.`);
+      return;
+    }
+
     setFormError("");
     setSuccessMessage("");
     setUploading(true);
@@ -183,9 +191,7 @@ export default function CreatorPanelPage() {
       const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
 
       if (!cloudName || !uploadPreset) {
-        throw new Error(
-          "Faltan variables de entorno de Cloudinary. Revisa .env.local"
-        );
+        throw new Error("Faltan variables de entorno de Cloudinary. Revisa .env.local");
       }
 
       // 1) Subir la imagen a Cloudinary
@@ -246,18 +252,15 @@ export default function CreatorPanelPage() {
 
       // Reset formulario
       setFile(null);
-      const inputFile = document.getElementById("photo-input") as
-        | HTMLInputElement
-        | null;
+      const inputFile = document.getElementById("photo-input") as HTMLInputElement | null;
       if (inputFile) inputFile.value = "";
       setSlug("");
-      setPriceView(100);
+      setPriceView(MIN_PRICE); // ✅ default 70
       setPriceDownload(130); // se mantiene
       setSuccessMessage("Foto subida y lista para compartir ✅");
     } catch (error) {
       console.error(error);
-      const msg =
-        error instanceof Error ? error.message : "Error al subir la foto.";
+      const msg = error instanceof Error ? error.message : "Error al subir la foto.";
       setFormError(msg);
     } finally {
       setUploading(false);
@@ -360,15 +363,11 @@ export default function CreatorPanelPage() {
         {/* GANANCIAS (ARRIBA) */}
         <section className="space-y-4">
           <div className="rounded-2xl border border-emerald-400/60 bg-slate-900/80 p-4 flex flex-col gap-1">
-            <span className="text-[11px] text-gray-400">
-              Ganancias totales estimadas
-            </span>
+            <span className="text-[11px] text-gray-400">Ganancias totales estimadas</span>
             <span className="text-2xl font-bold text-emerald-300">
               ${totals.totalEarnings} MXN
             </span>
-            <span className="text-[11px] text-gray-500">
-              Suma de todas las ganancias de tus fotos.
-            </span>
+            <span className="text-[11px] text-gray-500">Suma de todas las ganancias de tus fotos.</span>
           </div>
         </section>
 
@@ -385,9 +384,7 @@ export default function CreatorPanelPage() {
 
           <form onSubmit={handleSubmit} className="space-y-3 text-sm">
             <div>
-              <label className="block text-xs text-gray-300 mb-1">
-                Archivo de la foto
-              </label>
+              <label className="block text-xs text-gray-300 mb-1">Archivo de la foto</label>
               <input
                 id="photo-input"
                 type="file"
@@ -401,9 +398,7 @@ export default function CreatorPanelPage() {
             </div>
 
             <div>
-              <label className="block text-xs text-gray-300 mb-1">
-                Slug / ID público (ej. dani3)
-              </label>
+              <label className="block text-xs text-gray-300 mb-1">Slug / ID público (ej. dani3)</label>
               <input
                 type="text"
                 value={slug}
@@ -415,12 +410,10 @@ export default function CreatorPanelPage() {
 
             {/* Solo precio para ver (UI) */}
             <div>
-              <label className="block text-xs text-gray-300 mb-1">
-                Precio (MXN)
-              </label>
+              <label className="block text-xs text-gray-300 mb-1">Precio (MXN)</label>
               <input
                 type="number"
-                min={0}
+                min={MIN_PRICE}
                 value={priceView}
                 onChange={(e) => setPriceView(Number(e.target.value))}
                 className="w-full rounded-lg bg-slate-950/70 border border-slate-700 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400"
@@ -429,9 +422,7 @@ export default function CreatorPanelPage() {
 
             {formError && <p className="text-xs text-red-400">{formError}</p>}
 
-            {successMessage && (
-              <p className="text-xs text-emerald-300">{successMessage}</p>
-            )}
+            {successMessage && <p className="text-xs text-emerald-300">{successMessage}</p>}
 
             <button
               type="submit"
@@ -447,9 +438,7 @@ export default function CreatorPanelPage() {
         <section className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4 sm:p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold">Tus fotos en venta</h2>
-            <span className="text-[10px] text-gray-500">
-              Comparte el enlace público con tus fans
-            </span>
+            <span className="text-[10px] text-gray-500">Comparte el enlace público con tus fans</span>
           </div>
 
           {loadingPhotos ? (
