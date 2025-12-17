@@ -56,7 +56,7 @@ export default function CreatorPanelPage() {
   const [priceView, setPriceView] = useState<number>(100);
   const [priceDownload, setPriceDownload] = useState<number>(130); // se mantiene, pero NO se muestra en UI
 
-  const MIN_PRICE = 10; // ✅ antes 70
+  const MIN_PRICE = 70;
 
   const [uploading, setUploading] = useState(false);
   const [formError, setFormError] = useState("");
@@ -176,12 +176,6 @@ export default function CreatorPanelPage() {
       return;
     }
 
-    // ✅ Mínimo $10 (antes 70)
-    if (priceView < MIN_PRICE) {
-      setFormError(`El precio mínimo es $${MIN_PRICE} MXN.`);
-      return;
-    }
-
     setFormError("");
     setSuccessMessage("");
     setUploading(true);
@@ -255,7 +249,7 @@ export default function CreatorPanelPage() {
       const inputFile = document.getElementById("photo-input") as HTMLInputElement | null;
       if (inputFile) inputFile.value = "";
       setSlug("");
-      setPriceView(10); // ✅ antes MIN_PRICE=70
+      setPriceView(100);
       setPriceDownload(130); // se mantiene
       setSuccessMessage("Foto subida y lista para compartir ✅");
     } catch (error) {
@@ -413,7 +407,7 @@ export default function CreatorPanelPage() {
               <label className="block text-xs text-gray-300 mb-1">Precio (MXN)</label>
               <input
                 type="number"
-                min={MIN_PRICE}
+                min={0}
                 value={priceView}
                 onChange={(e) => setPriceView(Number(e.target.value))}
                 className="w-full rounded-lg bg-slate-950/70 border border-slate-700 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400"
@@ -451,7 +445,8 @@ export default function CreatorPanelPage() {
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {photos.map((photo) => {
                 const publicUrl = `/mi-foto/${photo.slug || photo.id}`;
-                const totalEarningsPhoto = (photo.earningsView ?? 0) + (photo.earningsDownload ?? 0);
+                const totalEarningsPhoto =
+                  (photo.earningsView ?? 0) + (photo.earningsDownload ?? 0);
 
                 return (
                   <div
@@ -468,17 +463,23 @@ export default function CreatorPanelPage() {
 
                     <p className="text-[11px] text-gray-400">
                       Slug:{" "}
-                      <span className="text-gray-200 font-mono">{photo.slug || photo.id}</span>
+                      <span className="text-gray-200 font-mono">
+                        {photo.slug || photo.id}
+                      </span>
                     </p>
 
                     <p className="text-[11px] text-gray-400">
                       Precio:{" "}
-                      <span className="text-emerald-300 font-semibold">${photo.priceView} MXN</span>
+                      <span className="text-emerald-300 font-semibold">
+                        ${photo.priceView} MXN
+                      </span>
                     </p>
 
                     <p className="text-[11px] text-gray-400">
                       Ganado:{" "}
-                      <span className="text-emerald-300 font-semibold">${totalEarningsPhoto} MXN</span>
+                      <span className="text-emerald-300 font-semibold">
+                        ${totalEarningsPhoto} MXN
+                      </span>
                     </p>
 
                     <p className="text-[11px] text-gray-400 break-all">
@@ -492,7 +493,9 @@ export default function CreatorPanelPage() {
                         type="button"
                         onClick={async () => {
                           try {
-                            await navigator.clipboard.writeText(`${window.location.origin}${publicUrl}`);
+                            await navigator.clipboard.writeText(
+                              `${window.location.origin}${publicUrl}`
+                            );
                             alert("Enlace copiado al portapapeles ✅");
                           } catch {
                             alert("No se pudo copiar el enlace. Cópialo manualmente.");
