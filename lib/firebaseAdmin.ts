@@ -1,25 +1,25 @@
 // lib/firebaseAdmin.ts
-import admin from "firebase-admin";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
-function getPrivateKey() {
-  const key = process.env.FIREBASE_ADMIN_PRIVATE_KEY;
-  if (!key) return "";
-  // En envs suele venir con \n escapados
-  return key.replace(/\\n/g, "\n");
+function normalizePrivateKey() {
+  return process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(/\\n/g, "\n");
 }
 
 export function getAdminDb() {
-  if (!admin.apps.length) {
+  if (!getApps().length) {
     const projectId = process.env.FIREBASE_ADMIN_PROJECT_ID;
     const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
-    const privateKey = getPrivateKey();
+    const privateKey = normalizePrivateKey();
 
     if (!projectId || !clientEmail || !privateKey) {
-      throw new Error("Missing Firebase Admin env vars");
+      throw new Error(
+        "Faltan envs Firebase Admin: FIREBASE_ADMIN_PROJECT_ID / FIREBASE_ADMIN_CLIENT_EMAIL / FIREBASE_ADMIN_PRIVATE_KEY"
+      );
     }
 
-    admin.initializeApp({
-      credential: admin.credential.cert({
+    initializeApp({
+      credential: cert({
         projectId,
         clientEmail,
         privateKey,
@@ -27,5 +27,5 @@ export function getAdminDb() {
     });
   }
 
-  return admin.firestore();
+  return getFirestore();
 }

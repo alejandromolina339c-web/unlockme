@@ -17,64 +17,22 @@ function getTopicFromRequest(reqUrl: string, body: any) {
   return (qTopic || bTopic).toLowerCase();
 }
 
-// ✅ Extrae un ID numérico desde cosas como:
-// - "123456789"
-// - "https://api.mercadopago.com/v1/payments/123456789"
-// - "checkout_merchant_order-123456789" (si trae dígitos)
-function extractNumericId(input: string | null | undefined) {
-  const raw = String(input || "").trim();
-  if (!raw) return null;
-
-  // Si viene como URL, tomar el último segmento
-  try {
-    if (raw.startsWith("http://") || raw.startsWith("https://")) {
-      const u = new URL(raw);
-      const last = u.pathname.split("/").filter(Boolean).pop() || "";
-      const m = last.match(/\d+/g);
-      return m ? m[m.length - 1] : null;
-    }
-  } catch {
-    // ignore
-  }
-
-  // Si viene mezclado, toma el último bloque de dígitos
-  const matches = raw.match(/\d+/g);
-  if (!matches || matches.length === 0) return null;
-  return matches[matches.length - 1];
-}
-
 function getIdFromRequest(reqUrl: string, body: any) {
   const url = new URL(reqUrl);
 
   // MP puede enviar el id así:
   // 1) body.data.id
-  // 2) body.id (a veces)
-  // 3) body.resource (URL)
-  // 4) query data.id (data.id=123)
-  // 5) query id / payment_id
-  // 6) query resource (URL)
+  // 2) query data.id (data.id=123)
+  // 3) query id / payment_id
   const bodyId = body?.data?.id ? String(body.data.id) : null;
-  const bodyPlainId = body?.id ? String(body.id) : null;
-  const bodyResource = body?.resource ? String(body.resource) : null;
 
   const queryId =
     url.searchParams.get("data.id") ||
     url.searchParams.get("id") ||
     url.searchParams.get("payment_id");
 
-  const queryResource = url.searchParams.get("resource");
-
-  // Preferimos el ID directo si viene, si no, intentamos extraer desde "resource"
-  const direct = String(bodyId || bodyPlainId || queryId || "").trim();
-  if (direct) return direct;
-
-  const resource = String(bodyResource || queryResource || "").trim();
-  if (resource) {
-    const extracted = extractNumericId(resource);
-    if (extracted) return extracted;
-  }
-
-  return null;
+  const id = String(bodyId || queryId || "").trim();
+  return id || null;
 }
 
 async function fetchMpJson(url: string, accessToken: string) {
@@ -118,40 +76,27 @@ export async function POST(req: Request) {
     }
 
     const topic = getTopicFromRequest(req.url, body);
-    const incomingIdRaw = getIdFromRequest(req.url, body);
+    const incomingId = getIdFromRequest(req.url, body);
 
     // Si no hay id, respondemos 200 para que MP no reintente sin sentido
-    if (!incomingIdRaw) {
+    if (!incomingId) {
       return NextResponse.json({ ok: true }, { status: 200 });
     }
-
-    // ✅ Si llega algo tipo "checkout_merchant_order-...." intentamos rescatar dígitos
-    const incomingIdNumeric = extractNumericId(incomingIdRaw);
-    const incomingId = incomingIdNumeric || String(incomingIdRaw);
 
     // 1) Resolver uno o varios paymentIds según el tipo de notificación
     let paymentIds: string[] = [];
 
     // Merchant order (muy común que MP mande esto)
     if (topic.includes("merchant_order")) {
-      // Solo tiene sentido si hay un ID numérico real de merchant_order
-      const moId = extractNumericId(incomingId);
-      const mo = moId
-        ? await fetchMpJson(
-            `https://api.mercadopago.com/merchant_orders/${moId}`,
-            accessToken
-          )
-        : null;
+      const mo = await fetchMpJson(
+        `https://api.mercadopago.com/merchant_orders/${incomingId}`,
+        accessToken
+      );
 
       const moPayments = Array.isArray(mo?.payments) ? mo.payments : [];
       paymentIds = moPayments
         .map((p: any) => (p?.id ? String(p.id) : ""))
         .filter((x: string) => x.trim().length > 0);
-
-      // ✅ Fallback: si no pudimos resolver merchant_order, probamos como payment directo
-      if (paymentIds.length === 0) {
-        paymentIds = [String(incomingId)];
-      }
     } else {
       // Asumimos payment directo
       paymentIds = [String(incomingId)];

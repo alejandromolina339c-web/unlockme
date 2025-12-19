@@ -176,6 +176,12 @@ export default function CreatorPanelPage() {
       return;
     }
 
+    // ✅ Mínimo $70
+    if (priceView < MIN_PRICE) {
+      setFormError(`El precio mínimo es $${MIN_PRICE} MXN.`);
+      return;
+    }
+
     setFormError("");
     setSuccessMessage("");
     setUploading(true);
@@ -249,7 +255,7 @@ export default function CreatorPanelPage() {
       const inputFile = document.getElementById("photo-input") as HTMLInputElement | null;
       if (inputFile) inputFile.value = "";
       setSlug("");
-      setPriceView(100);
+      setPriceView(MIN_PRICE); // ✅ default 70
       setPriceDownload(130); // se mantiene
       setSuccessMessage("Foto subida y lista para compartir ✅");
     } catch (error) {
@@ -407,7 +413,7 @@ export default function CreatorPanelPage() {
               <label className="block text-xs text-gray-300 mb-1">Precio (MXN)</label>
               <input
                 type="number"
-                min={0}
+                min={MIN_PRICE}
                 value={priceView}
                 onChange={(e) => setPriceView(Number(e.target.value))}
                 className="w-full rounded-lg bg-slate-950/70 border border-slate-700 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400"
