@@ -1,107 +1,127 @@
 // app/api/checkout/route.ts
 import { NextResponse } from "next/server";
-import { db } from "@/lib/firebase";
-import { doc, getDoc, collection, getDocs, query, where, limit } from "firebase/firestore";
+import { getAdminDb } from "@/lib/firebaseAdmin";
 
-function getBaseUrl() {
-  const raw = (process.env.NEXT_PUBLIC_APP_URL || "").trim();
-  if (!raw) return "https://unlockme.com.mx";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-  const noProto = raw.replace(/^https?:\/\//, "");
-  const noSlash = noProto.replace(/\/+$/, "");
-  return `https://${noSlash}`;
+type Body = {
+  photoId?: string; // puede venir slug o docId
+  mode?: "view" | "download";
+};
+
+function getBaseUrl(req: Request) {
+  const envUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (envUrl) return envUrl.replace(/\/$/, "");
+  try {
+    return new URL(req.url).origin;
+  } catch {
+    return "http://localhost:3000";
+  }
 }
 
-type CheckoutBody = {
-  photoId?: string; // puede ser docId o slug
-  mode?: "view" | "download";
-  title?: string;
-  // compat con tu body viejo
-  price?: number;
-};
+function isHidden(data: any) {
+  return data?.hidden === true;
+}
+
+function createdAtMillis(data: any): number {
+  const v = data?.createdAt;
+  // admin Timestamp tiene .toMillis()
+  if (v?.toMillis) return v.toMillis();
+  // por si llega como Date/string/number
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === "number") return v;
+  return 0;
+}
+
+async function findPhotoByIdOrSlug(db: FirebaseFirestore.Firestore, idOrSlug: string) {
+  // 1) por docId
+  const byId = await db.collection("photos").doc(idOrSlug).get();
+  if (byId.exists) return { id: byId.id, ...(byId.data() as any) };
+
+  // 2) por slug (✅ robusto ante slugs duplicados y hidden:true)
+  const q = await db.collection("photos").where("slug", "==", idOrSlug).limit(10).get();
+  if (q.empty) return null;
+
+  // Elegimos el mejor candidato: NO oculto y más reciente
+  const candidates = q.docs
+    .map((d) => ({ id: d.id, ...(d.data() as any) }))
+    .filter((p) => !isHidden(p));
+
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => createdAtMillis(b) - createdAtMillis(a));
+  return candidates[0];
+}
 
 export async function POST(req: Request) {
   try {
-    const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+    const body = (await req.json().catch(() => null)) as Body | null;
+    const idOrSlug = (body?.photoId || "").toString().trim();
+    const mode = body?.mode === "download" ? "download" : "view";
+
+    if (!idOrSlug) {
+      return NextResponse.json({ error: "missing_photoId" }, { status: 400 });
+    }
+
+    const accessToken = (process.env.MERCADOPAGO_ACCESS_TOKEN || "").trim();
     if (!accessToken) {
-      return NextResponse.json(
-        { error: "Pagos no disponibles en este momento." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "missing_MERCADOPAGO_ACCESS_TOKEN" }, { status: 500 });
     }
 
-    const body = (await req.json()) as CheckoutBody;
+    const db = getAdminDb();
+    const photo = await findPhotoByIdOrSlug(db, idOrSlug);
 
-    const photoIdRaw = String(body.photoId || "").trim();
-    const mode: "view" | "download" = body.mode === "download" ? "download" : "view";
-    const title = String(body.title || "Foto premium").trim();
-
-    if (!photoIdRaw) {
-      return NextResponse.json(
-        { error: "Faltan datos para crear el checkout." },
-        { status: 400 }
-      );
+    if (!photo) {
+      return NextResponse.json({ error: "not_found" }, { status: 404 });
     }
 
-    // 1) Buscar foto por docId primero
-    let photoDocId = photoIdRaw;
-    let snap = await getDoc(doc(db, "photos", photoDocId));
-
-    // 2) Fallback: si no existe, buscar por slug
-    if (!snap.exists()) {
-      const q = query(
-        collection(db, "photos"),
-        where("slug", "==", photoIdRaw),
-        limit(1)
-      );
-      const found = await getDocs(q);
-      if (!found.empty) {
-        photoDocId = found.docs[0].id;
-        snap = await getDoc(doc(db, "photos", photoDocId));
-      }
+    // Seguridad: si está oculto por moderación => no se vende
+    if (photo.hidden === true) {
+      return NextResponse.json({ error: "not_found" }, { status: 404 });
     }
 
-    if (!snap.exists()) {
-      return NextResponse.json({ error: "Foto no encontrada." }, { status: 404 });
+    const price =
+      mode === "download"
+        ? Number(photo.priceDownload ?? NaN)
+        : Number(photo.priceView ?? NaN);
+
+    if (!Number.isFinite(price) || price < 0) {
+      return NextResponse.json({ error: "invalid_price" }, { status: 400 });
     }
 
-    const data = snap.data() as any;
+    const baseUrl = getBaseUrl(req);
+    const publicId = encodeURIComponent(photo.slug || photo.id);
 
-    const priceView = Number(data.priceView ?? 0);
-    const priceDownload = Number(data.priceDownload ?? 0);
+    const back_urls = {
+      success: `${baseUrl}/mi-foto/${publicId}?status=success`,
+      pending: `${baseUrl}/mi-foto/${publicId}?status=pending`,
+      failure: `${baseUrl}/mi-foto/${publicId}?status=failure`,
+    };
 
-    const unitPrice = mode === "download" ? priceDownload : priceView;
+    // notification_url solo en https
+    const webhookToken = (process.env.MERCADOPAGO_WEBHOOK_TOKEN || "").trim();
+    const canUseNotificationUrl = baseUrl.startsWith("https://") && webhookToken.length > 0;
 
-    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
-      return NextResponse.json(
-        { error: "Precio inválido para esta foto." },
-        { status: 400 }
-      );
-    }
-
-    const baseUrl = getBaseUrl();
-
-    // ✅ external_reference: guardamos docId real + modo (ayuda al webhook)
-    const external_reference = `${photoDocId}|${mode}`;
-
-    const preferenceBody = {
+    const preferencePayload: any = {
       items: [
         {
-          id: photoDocId,
-          title,
+          title: photo.title || "UnlockMe - Foto",
           quantity: 1,
-          unit_price: unitPrice,
+          unit_price: price,
           currency_id: "MXN",
         },
       ],
-      back_urls: {
-        success: `${baseUrl}/mi-foto/${photoIdRaw}?status=success`,
-        failure: `${baseUrl}/mi-foto/${photoIdRaw}?status=failure`,
-        pending: `${baseUrl}/mi-foto/${photoIdRaw}?status=pending`,
-      },
+      back_urls,
       auto_return: "approved",
-      external_reference,
+      external_reference: `${photo.id}|${mode}`, // SIEMPRE docId real para webhook
     };
+
+    if (canUseNotificationUrl) {
+      preferencePayload.notification_url = `${baseUrl}/api/mercadopago/webhook?token=${encodeURIComponent(
+        webhookToken
+      )}`;
+    }
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -109,27 +129,34 @@ export async function POST(req: Request) {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(preferenceBody),
+      body: JSON.stringify(preferencePayload),
     });
 
-    const mpData = await mpRes.json();
+    const raw = await mpRes.text();
+    let mpJson: any = null;
+    try {
+      mpJson = JSON.parse(raw);
+    } catch {}
 
     if (!mpRes.ok) {
-      console.error("MP preference error:", mpData);
       return NextResponse.json(
-        { error: mpData?.message || mpData?.error || "Error con la pasarela de pago." },
-        { status: 500 }
+        {
+          error: "mp_preference_failed",
+          status: mpRes.status,
+          mp: mpJson || raw.slice(0, 400),
+        },
+        { status: 502 }
       );
     }
 
-    const url = mpData?.init_point || mpData?.sandbox_init_point;
+    const url = mpJson?.init_point || mpJson?.sandbox_init_point;
     if (!url) {
-      return NextResponse.json({ error: "Mercado Pago no devolvió URL." }, { status: 500 });
+      return NextResponse.json({ error: "missing_init_point", mp: mpJson }, { status: 502 });
     }
 
-    return NextResponse.json({ url });
-  } catch (error) {
-    console.error("Checkout error:", error);
-    return NextResponse.json({ error: "Error creando checkout." }, { status: 500 });
+    return NextResponse.json({ url }, { status: 200 });
+  } catch (e) {
+    console.error("checkout error:", e);
+    return NextResponse.json({ error: "server_error" }, { status: 500 });
   }
 }
